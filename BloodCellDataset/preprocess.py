@@ -7,7 +7,6 @@ from tqdm import tqdm
 from dataclasses import dataclass
 import copy
 
-
 PATCH_SIZE = 128
 MIN_CELL_AREA = 10 * 10
 CONTEXT_BIN_SIZE = 32
@@ -120,9 +119,11 @@ def slice_dataset(
     bg_patches = []
     bg_masks = []
     cell_data: List[CellRecord] = []
+    labeled = []
 
     orig_size = None
 
+    # TODO: make threaded
     for i, idx in tqdm(enumerate(indices), "Slicing dataset", len(indices)):
         image = cv2.imread(orig_files[idx], cv2.IMREAD_COLOR_RGB)
         mask = cv2.imread(mask_files[idx], cv2.IMREAD_GRAYSCALE)
@@ -135,6 +136,10 @@ def slice_dataset(
 
         if orig_size is None:
             orig_size = mask.shape
+
+        gray_img = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        num_cells = len(cells)
+        labeled.append((gray_img, num_cells))
 
         # TODO:
         # 1. extract patches with multiple cells
@@ -157,11 +162,12 @@ def slice_dataset(
         ):
             cell, cell_mask = record.image, record.mask
             cv2.imwrite(
-                str(CELL_DIR / f"cell_{i:05d}.png"), cv2.cvtColor(cell, cv2.COLOR_RGB2BGR)
+                str(CELL_DIR / f"cell_{i:05d}.png"),
+                cv2.cvtColor(cell, cv2.COLOR_RGB2BGR),
             )
             cv2.imwrite(str(CELL_DIR / f"cell_{i:05d}_mask.png"), cell_mask)
 
     if orig_size is None:
         orig_size = (PATCH_SIZE, PATCH_SIZE)
 
-    return bg_patches, cell_data, bg_masks, orig_size
+    return bg_patches, cell_data, bg_masks, labeled, orig_size

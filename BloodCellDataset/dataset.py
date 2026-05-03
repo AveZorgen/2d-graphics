@@ -16,7 +16,7 @@ DATA_DIR = Path("data")
 TMP_DIR = DATA_DIR / "tmp"
 
 
-class BloodCellDataset():
+class BloodCellDataset:
     def __init__(
         self,
         orig_size: Tuple[int, int],
@@ -44,7 +44,8 @@ class BloodCellDataset():
         self.color_hist_by_context = {}
         self.patch_count = 0
         self.nbrs = None
-        self.avg_cells_per_patch = 1.0
+        self.cell_num_p = [1.0]
+        self.cell_num_v = [1.0, 1.0]
 
         self.patch_size = self.img_size
 
@@ -53,10 +54,15 @@ class BloodCellDataset():
 
     def fit(
         self,
-        data: Tuple[List[np.ndarray], List[np.ndarray], List[CellRecord]],
+        data: Tuple[
+            List[np.ndarray],
+            List[np.ndarray],
+            List[CellRecord],
+            List[Tuple[np.array, int]],
+        ],
         max_samples: int = 5000,
     ):
-        bg_patches, bg_masks, cell_data = data
+        bg_patches, bg_masks, cell_data, labeled_orig = data
         if len(bg_patches) > max_samples:
             indices = random.sample(range(len(bg_patches)), max_samples)
             bg_patches = [bg_patches[i] for i in indices]
@@ -94,10 +100,10 @@ class BloodCellDataset():
         patch_size_w = (self.img_size[1] + patches_w - 1) // patches_w
         self.patch_size = patch_size_h, patch_size_w
 
-        total_patch_pool = max(1, len(self.bg_patches) + len(self.cell_data))
-        avg_cells_per_patch = len(self.cell_data) / total_patch_pool
-
-        self.avg_num_cells = max(1.0, avg_cells_per_patch * self.patch_count)
+        h, v = np.histogram([n for _, n in labeled_orig], bins=50)
+        h = h / h.sum()
+        self.cell_num_p = h
+        self.cell_num_v = v
 
         self.data = {}
 
@@ -167,13 +173,12 @@ class BloodCellDataset():
         return self.color_hist_by_context.get(context_key, self.color_hist)
 
     def _estimate_num_cells(self) -> int:
-        return int(
-            np.clip(np.random.poisson(self.avg_num_cells), 1, self.patch_count * 3)
-        )
+        idx = np.random.choice(len(self.cell_num_p), p=self.cell_num_p)
+        return np.random.randint(self.cell_num_v[idx], self.cell_num_v[idx + 1])
 
     def __getitem__(self, idx: int):
         # if idx in self.data:
-            # return self.data[idx]
+        # return self.data[idx]
         np.random.seed(idx)
         random.seed(idx)
 
@@ -190,6 +195,9 @@ class BloodCellDataset():
             cv2.imwrite(str(TMP_DIR / f"{idx:05d}_0_bg.png"), bg)
 
         num_cells = self._estimate_num_cells()
+
+        composite_src = bg.copy()
+        composite_mask = np.zeros(bg.shape[:2], dtype=np.uint8)
 
         for i in range(num_cells):
             # NOTE: key idea: not overfit future training but create representative dataset
@@ -218,16 +226,21 @@ class BloodCellDataset():
 
             bg_roi = bg[y1:y2, x1:x2]
 
-            result = bg.copy()
             src_roi = cell.copy()
-            src_mask = cell_mask.copy()
-            # src_roi[src_mask == 0] = base_color
-            src_roi[src_mask == 0] = bg_roi[src_mask == 0]
+            src_roi[cell_mask == 0] = bg_roi[cell_mask == 0]
 
             alpha = 0.7
-            result[y1:y2, x1:x2] = cv2.addWeighted(src_roi, alpha, bg_roi, 1 - alpha, 0)
 
-            bg = cv2.seamlessClone(cell, result, src_mask, (x, y), cv2.MIXED_CLONE)
+            bg[y1:y2, x1:x2] = cv2.addWeighted(src_roi, alpha, bg_roi, 1 - alpha, 0)
+            composite_mask[y1:y2, x1:x2] = np.maximum(
+                composite_mask[y1:y2, x1:x2], cell_mask
+            )
+
+        if np.any(composite_mask):
+            center = (self.img_size[1] // 2, self.img_size[0] // 2)
+            bg = cv2.seamlessClone(
+                composite_src, bg, composite_mask.copy(), center, cv2.MIXED_CLONE
+            )
 
         if self.verbose:
             cv2.imwrite(
