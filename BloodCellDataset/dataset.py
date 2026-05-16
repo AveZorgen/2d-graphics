@@ -6,7 +6,7 @@ import random
 from sklearn.model_selection import ParameterGrid
 from sklearn.neighbors import NearestNeighbors
 
-from .preprocess import CellRecord, quantize_color_key
+from .preprocess import CellRecord, TrainCellRecord, quantize_color_key
 from .noise import NOISE_PARAM_GRID, add_noise
 
 # NOTE: implementation may differ from hw2.ipynb
@@ -58,7 +58,7 @@ class BloodCellDataset:
             List[np.ndarray],
             List[np.ndarray],
             List[CellRecord],
-            List[Tuple[np.array, int]],
+            List[Tuple[np.array, int, List[TrainCellRecord]]],
         ],
         max_samples: int = 5000,
     ):
@@ -100,7 +100,7 @@ class BloodCellDataset:
         patch_size_w = (self.img_size[1] + patches_w - 1) // patches_w
         self.patch_size = patch_size_h, patch_size_w
 
-        h, v = np.histogram([n for _, n in labeled_orig], bins=50)
+        h, v = np.histogram([n for _, n, _ in labeled_orig], bins=50)
         h = h / h.sum()
         self.cell_num_p = h
         self.cell_num_v = v
@@ -195,9 +195,11 @@ class BloodCellDataset:
             cv2.imwrite(str(TMP_DIR / f"{idx:05d}_0_bg.png"), bg)
 
         num_cells = self._estimate_num_cells()
+        train_cell_data: List[List[TrainCellRecord]] = []
 
         composite_src = bg.copy()
         composite_mask = np.zeros(bg.shape[:2], dtype=np.uint8)
+        img_h, img_w = bg.shape[:2]
 
         for i in range(num_cells):
             # NOTE: key idea: not overfit future training but create representative dataset
@@ -218,6 +220,10 @@ class BloodCellDataset:
             h, w = self.patch_size
             x = np.random.randint(w // 2, self.img_size[1] - w // 2)
             y = np.random.randint(h // 2, self.img_size[0] - h // 2)
+
+            train_cell_data.append(
+                (x / img_w, y / img_h, w / img_w, h / img_h)
+            )
 
             x1 = x - w // 2
             x2 = x + w // 2
@@ -257,7 +263,13 @@ class BloodCellDataset:
                 str(TMP_DIR / f"{idx:05d}_{num_cells + 2}_noised.png"), noisy_img
             )
 
-        return bg, gray_img, (noisy_img, noise_type, noise_params), num_cells
+        return (
+            bg,
+            gray_img,
+            (noisy_img, noise_type, noise_params),
+            num_cells,
+            train_cell_data,
+        )
         # self.data[idx] = bg, gray_img, (noisy_img, noise_type, noise_params), num_cells
         # return self.data[idx]
 
